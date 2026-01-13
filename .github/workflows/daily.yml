@@ -1,28 +1,36 @@
-name: Daily News Automation
+name: News Scraper Automation
 
 on:
   schedule:
-    - cron: '0 13 * * *' # 한국 시간 밤 10시 (13:00 UTC)
-    - cron: '0 1 * * *'  # 한국 시간 오전 10시 (01:00 UTC)
-  workflow_dispatch:      # 필요할 때 수동으로 버튼 눌러서 실행 가능
+    # 1. 한국 시간 밤 10시 (22:00 KST -> 13:00 UTC)
+    - cron: '0 13 * * *'
+    # 2. 한국 시간 오전 10시 (10:00 KST -> 01:00 UTC)
+    - cron: '0 1 * * *'
+  workflow_dispatch:      # GitHub UI에서 'Run workflow' 버튼으로 수동 실행 가능
 
 jobs:
-  build:
+  scrape-and-store:
     runs-on: ubuntu-latest
 
     steps:
-      - name: Checkout code
+      # 1. GitHub 서버로 코드를 가져옴
+      - name: Checkout Repository
         uses: actions/checkout@v4
 
+      # 2. Node.js 환경 설치 (안정적인 20 버전 추천)
       - name: Setup Node.js
-        uses: actions/checkout@v4
+        uses: actions/setup-node@v4
         with:
           node-version: '20'
+          cache: 'npm' # npm 패키지 캐싱으로 실행 속도 향상
 
-      - name: Install dependencies
+      # 3. 필요한 라이브러리 설치 (rss-parser, supabase, genai 등)
+      - name: Install Dependencies
         run: npm install
 
-      - name: Run news scraper
+      # 4. 수집 스크립트 실행
+      # GitHub Secrets에 등록한 환경변수를 여기에 매핑해줍니다.
+      - name: Run Scraper
         run: node index.js
         env:
           GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
