@@ -1,0 +1,30 @@
+name: Daily News Automation
+
+on:
+  schedule:
+    - cron: '0 13 * * *' # 한국 시간 밤 10시 (13:00 UTC)
+    - cron: '0 1 * * *'  # 한국 시간 오전 10시 (01:00 UTC)
+  workflow_dispatch:      # 필요할 때 수동으로 버튼 눌러서 실행 가능
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/checkout@v4
+        with:
+          node-version: '20'
+
+      - name: Install dependencies
+        run: npm install
+
+      - name: Run news scraper
+        run: node index.js
+        env:
+          GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
+          SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
+          SUPABASE_ANON_KEY: ${{ secrets.SUPABASE_ANON_KEY }}
