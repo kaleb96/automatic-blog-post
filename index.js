@@ -27,7 +27,7 @@ async function generateContentWithRetry(prompt, retries = 3) {
   for (let i = 0; i < retries; i++) {
     try {
       const result = await ai.models.generateContent({
-        model: 'gemini-2.0-flash',
+        model: 'gemini-2.5-flash-lite',
         contents: [{ role: 'user', parts: [{ text: prompt }] }],
       });
       return result.candidates[0].content.parts[0].text;
