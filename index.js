@@ -58,8 +58,16 @@ async function main() {
 You are a professional tech blogger named 'Meerkat'. 
 Your goal is to transform the provided news into a high-quality blog post in both KOREAN and ENGLISH.
 
+### STRICT CATEGORIZATION RULES
+Choose exactly ONE tag from this list: [AI, Dev, Web, Security, BigTech, Startup, Gadget].
+**CRITICAL**: Do NOT use 'AI-ML', 'TECH', or 'DEV'. 
+Example: Even if the source is 'AI-ML', if it's about a startup's funding, use 'Startup'. If it's about a new device, use 'Gadget'.
+
+### SEO SLUG RULES
+- Create a URL-friendly English slug (e.g., "chatgpt-age-prediction-safety").
+
 ### STRICT TITLE RULES
-- **Format**: "[Category] Insightful Title" (e.g., "[DEV] Why AI is Changing the Game")
+- **Format**: "[Category] Insightful Title" (e.g., "[Web Development] Why AI is Changing the Game")
 - **KO Title**: Do NOT simply translate the original. Create a catchy, professional Korean title that focuses on the "Core Insight". Avoid listing brand names unless they are the main subject.
 - **EN Title**: Create a compelling "Click-worthy" title for global readers.
 - **Example**: 
@@ -89,22 +97,23 @@ Your goal is to transform the provided news into a high-quality blog post in bot
 - **Format**: Return ONLY a valid JSON object.
 - **No Hallucination**: Do not use Chinese or any language other than KO/EN.
 
-### JSON SCHEMA
+### JSON SCHEMA (MUST FOLLOW)
 {
+  "category": "Exactly one from: [AI, Dev, Web, Security, BigTech, Startup, Gadget]",
+  "slug": "url-friendly-slug",
   "title_ko": "[Category] Korean Title",
-  "content_ko": "Full markdown content in Korean",
+  "content_ko": "Markdown content in Korean",
   "title_en": "[Category] English Title",
-  "content_en": "Full markdown content in English"
+  "content_en": "Markdown content in English"
 }
 
 ### INPUT DATA
-- Category: ${feed.category}
-- Title: ${article.title}
-- Snippet: ${article.contentSnippet}
-- Link: ${article.link}
+- Feed Source: ${feed.category} (IGNORE THIS during classification)
+- News Title: ${article.title}
+- News Link: ${article.link}
 `;
 
-      // NOTE: 임시 주석
+      // NOTE: Google Gemini API 연동 구문 임시 주석 처리
       // const result = await ai.models.generateContent({
       //   model: 'gemini-2.0-flash', // 일일 1500회 무료 모델 추천
       //   contents: [{ role: 'user', parts: [{ text: prompt }] }],
@@ -114,7 +123,7 @@ Your goal is to transform the provided news into a high-quality blog post in bot
       // const responseText = result.candidates[0].content.parts[0].text;
       // const parsed = JSON.parse(responseText);
 
-      // NOTE: GROQ TEST
+      // NOTE: GROQ API 연동
       const chatCompletion = await groq.chat.completions.create({
         messages: [
           {
@@ -130,19 +139,20 @@ Your goal is to transform the provided news into a high-quality blog post in bot
       });
 
       const parsed = JSON.parse(chatCompletion.choices[0].message.content);
-      console.log('link = ', article.link);
+      console.log('category', feed.category);
       console.log('parse = ', parsed);
-      // 4. DB 저장 (미리 구현된 통계 컬럼 포함)
+      // NOTE: DB 저장
       const { error: dbError } = await supabase.from('news_dev').insert([
         {
-          category: feed.category,
+          category: parsed.category, // AI가 새로 뽑은 카테고리
+          slug: parsed.slug, // ★이 부분이 빠져있으면 에러가 납니다!
           original_url: article.link,
           title_ko: parsed.title_ko,
           content_ko: parsed.content_ko,
           title_en: parsed.title_en,
           content_en: parsed.content_en,
-          views: 0, // 조회수 초기값
-          likes: 0, // 좋아요 초기값
+          views: 0,
+          likes: 0,
         },
       ]);
 
