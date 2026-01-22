@@ -1,4 +1,3 @@
-import { GoogleGenAI } from '@google/genai';
 import { createClient } from '@supabase/supabase-js';
 import 'dotenv/config';
 import OpenAI from 'openai';
@@ -6,11 +5,9 @@ import Parser from 'rss-parser';
 
 const parser = new Parser();
 const supabase = createClient(process.env.SUPABASE_DEV_URL, process.env.SUPABASE_DEV_ANON_KEY);
-// const supabase = createClient(process.env.SUPABASE_URL, process.env.SUPABASE_ANON_KEY);
-const ai = new GoogleGenAI({ apiKey: process.env.GEMINI_API_KEY });
 const groq = new OpenAI({
   apiKey: process.env.GROQ_API_KEY,
-  baseURL: 'https://api.groq.com/openai/v1', // Groq 서버로 연결
+  baseURL: 'https://api.groq.com/openai/v1',
 });
 
 const FEEDS = [
@@ -29,22 +26,42 @@ const FEEDS = [
   },
 ];
 
+/**
+ * [언어 검증 함수]
+ * ko 필드에 한글이 있는지, en 필드에 이상한 외국어 비중이 높지 않은지 체크합니다.
+ */
+function validateLanguage(data) {
+  if (!data.title_ko || !data.content_ko || !data.title_en || !data.content_en) return false;
+
+  const koRegex = /[가-힣]/; // 한글 포함 여부
+  const enUnusualChars = /[^\x00-\x7F]/g; // ASCII 외 문자 (유럽 특수문자 등)
+
+  const isKoValid = koRegex.test(data.title_ko) && koRegex.test(data.content_ko);
+
+  const enContent = data.content_en;
+  const matches = enContent.match(enUnusualChars);
+  const isEnValid = !matches || matches.length < enContent.length * 0.05;
+
+  return isKoValid && isEnValid;
+}
+
 async function main() {
-  console.log('🚀 뉴스 수집 및 다국어 분석 시작...');
+  console.log('🚀 미어캣 로그 자동 포스팅 시스템 가동...');
 
   for (const feed of FEEDS) {
     try {
       const data = await parser.parseURL(feed.url);
-      const article = data.items[0]; // 1. 피드당 최신 기사 1개만 추출
+      const article = data.items[0];
 
       if (!article) continue;
 
-      // 2. DB 중복체크
+      // DB 중복체크
       const { data: existing } = await supabase
         .from('news_dev')
         .select('id')
         .eq('original_url', article.link)
         .single();
+
       if (existing) {
         console.log(`[Skip] 이미 존재하는 기사: ${article.title}`);
         continue;
@@ -52,11 +69,21 @@ async function main() {
 
       console.log(`[Processing] ${feed.category} - ${article.title}`);
 
-      // 3. 한 번의 요청으로 국문/영문 데이터를 모두 가져오는 프롬프트
-      const prompt = `
+      let attempts = 0;
+      const maxAttempts = 3;
+      let finalParsedData = null;
+
+      while (attempts < maxAttempts) {
+        const prompt = `
 ### ROLE
 You are a professional tech blogger named 'Meerkat'. 
 Your goal is to transform the provided news into a high-quality blog post in both KOREAN and ENGLISH.
+
+### Instructions:
+  - Do NOT use any language other than Korean and English.
+  - Even if the source material contains other languages, translate them entirely into the target language.
+  - If you use English technical terms in Korean mode, use them alongside Korean explanations.
+  ${attempts > 0 ? "⚠️ CRITICAL: Your previous response contained incorrect languages. Ensure '_ko' fields are strictly Korean and '_en' fields are strictly English." : ''}
 
 ### STRICT CATEGORIZATION RULES
 Choose exactly ONE tag from this list: [AI, Dev, Web, Security, BigTech, Startup, Gadget].
@@ -70,16 +97,12 @@ Example: Even if the source is 'AI-ML', if it's about a startup's funding, use '
 - **Format**: "[Category] Insightful Title" (e.g., "[Web Development] Why AI is Changing the Game")
 - **KO Title**: Do NOT simply translate the original. Create a catchy, professional Korean title that focuses on the "Core Insight". Avoid listing brand names unless they are the main subject.
 - **EN Title**: Create a compelling "Click-worthy" title for global readers.
-- **Example**: 
-  - Raw: "Best Ads of the Week: Pringles..."
-  - Result KO: "[DEV] 글로벌 브랜드들이 광고 속에 숨겨둔 영리한 기술 전략"
-  - Result EN: "[DEV] Decoding the Tech-Driven Strategies of This Week's Top Ads"
 
 ### TASK & CONTENT QUALITY
 1. **Analyze**: Use ${article.title} and ${article.contentSnippet}.
-2. **Title**: Create a compelling, "click-worthy" title that highlights the most interesting part of the news. Avoid generic titles like "Best Ads of the Week". Instead, try "The Secret Strategy Behind This Week's Top Ads".
+2. **Title**: Create a compelling, "click-worthy" title that highlights the most interesting part of the news.
 3. **Insight**: Don't just summarize. Explain *why* this matters to developers or tech enthusiasts. 
-4. **Variety**: Avoid repetitive sentence structures (e.g., "This is...", "This is..."). Use active voice and diverse transitions.
+4. **Variety**: Avoid repetitive sentence structures. Use active voice and diverse transitions.
 
 ### CONTENT STRUCTURE (Apply to both KO and EN)
 1. **Greeting**: Start with "안녕하세요, 미어캣입니다." (KO) / "Hello, I'm Meerkat." (EN) followed by TWO newlines.
@@ -108,61 +131,63 @@ Example: Even if the source is 'AI-ML', if it's about a startup's funding, use '
 }
 
 ### INPUT DATA
-- Feed Source: ${feed.category} (IGNORE THIS during classification)
 - News Title: ${article.title}
 - News Link: ${article.link}
 `;
 
-      // NOTE: Google Gemini API 연동 구문 임시 주석 처리
-      // const result = await ai.models.generateContent({
-      //   model: 'gemini-2.0-flash', // 일일 1500회 무료 모델 추천
-      //   contents: [{ role: 'user', parts: [{ text: prompt }] }],
-      //   generationConfig: { responseMimeType: 'application/json' }, // JSON 응답 강제
-      // });
+        const chatCompletion = await groq.chat.completions.create({
+          messages: [
+            {
+              role: 'system',
+              content:
+                'You are a tech blog writer. You provide deep insights. You output only JSON.',
+            },
+            { role: 'user', content: prompt },
+          ],
+          model: 'llama-3.3-70b-versatile',
+          temperature: 0.15, // 일관성과 창의성의 균형
+          response_format: { type: 'json_object' },
+        });
 
-      // const responseText = result.candidates[0].content.parts[0].text;
-      // const parsed = JSON.parse(responseText);
+        const parsed = JSON.parse(chatCompletion.choices[0].message.content || '{}');
 
-      // NOTE: GROQ API 연동
-      const chatCompletion = await groq.chat.completions.create({
-        messages: [
-          {
-            role: 'system',
-            content:
-              'You are a tech blog writer. You provide deep insights with specific technical details. You never use generic marketing phrases. You output only JSON.',
-          },
-          { role: 'user', content: prompt },
-        ],
-        model: 'llama-3.3-70b-versatile', // Groq의 고성능 무료 모델
-        temperature: 0.2, // 0.1~0.2로 낮추면 헛소리(중국어 등)를 할 확률이 극도로 낮아집니다.
-        response_format: { type: 'json_object' }, // JSON 출력 보장
-      });
+        // 검증 로직 가동
+        if (validateLanguage(parsed)) {
+          finalParsedData = parsed;
+          break;
+        } else {
+          attempts++;
+          console.warn(`[Retry] 언어 검증 실패 (${attempts}/${maxAttempts}). 다시 생성합니다...`);
+        }
+      }
+      console.log('data = ', finalParsedData);
+      if (!finalParsedData) {
+        console.error(`[Fail] ${article.title} - 언어 검증을 통과하지 못해 스킵합니다.`);
+        continue;
+      }
 
-      const parsed = JSON.parse(chatCompletion.choices[0].message.content);
-      console.log('category', feed.category);
-      console.log('parse = ', parsed);
-      // NOTE: DB 저장
+      // DB 저장
       const { error: dbError } = await supabase.from('news_dev').insert([
         {
-          category: parsed.category, // AI가 새로 뽑은 카테고리
-          slug: parsed.slug, // ★이 부분이 빠져있으면 에러가 납니다!
+          category: finalParsedData.category,
+          slug: finalParsedData.slug,
           original_url: article.link,
-          title_ko: parsed.title_ko,
-          content_ko: parsed.content_ko,
-          title_en: parsed.title_en,
-          content_en: parsed.content_en,
+          title_ko: finalParsedData.title_ko,
+          content_ko: finalParsedData.content_ko,
+          title_en: finalParsedData.title_en,
+          content_en: finalParsedData.content_en,
           views: 0,
           likes: 0,
         },
       ]);
 
       if (dbError) throw dbError;
-      console.log(`✅ 저장 완료: ${parsed.title_ko}`);
+      console.log(`✅ 저장 성공: ${finalParsedData.title_ko}`);
 
-      // API 할당량 조절을 위한 대기
+      // API 쿨타임
       await new Promise((res) => setTimeout(res, 5000));
     } catch (error) {
-      console.error(`❌ 에러 발생 (${feed.category}):`, error.message);
+      console.error(`❌ 에러 발생:`, error.message);
     }
   }
 }
