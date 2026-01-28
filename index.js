@@ -1,52 +1,70 @@
-import { createClient } from '@supabase/supabase-js';
-import 'dotenv/config';
-import OpenAI from 'openai';
-import Parser from 'rss-parser';
+import { createClient } from "@supabase/supabase-js";
+import "dotenv/config";
+import OpenAI from "openai";
+import Parser from "rss-parser";
 
 const parser = new Parser();
-const supabase = createClient(process.env.SUPABASE_DEV_URL, process.env.SUPABASE_DEV_ANON_KEY);
+const supabase = createClient(
+  process.env.SUPABASE_DEV_URL,
+  process.env.SUPABASE_DEV_ANON_KEY,
+);
 const groq = new OpenAI({
   apiKey: process.env.GROQ_API_KEY,
-  baseURL: 'https://api.groq.com/openai/v1',
+  baseURL: "https://api.groq.com/openai/v1",
 });
 
 const FEEDS = [
-  { category: 'AI-ML', url: 'https://techcrunch.com/category/artificial-intelligence/feed/' },
   {
-    category: 'DEV',
-    url: 'https://news.google.com/rss/search?q=Web+Development+when:1d&hl=en-US&gl=US&ceid=US:en',
+    category: "AI-ML",
+    url: "https://techcrunch.com/category/artificial-intelligence/feed/",
   },
-  { category: 'TECH', url: 'https://techcrunch.com/feed/' },
-  { category: 'STARTUP', url: 'https://techcrunch.com/category/startups/feed/' },
-  { category: 'GADGET', url: 'https://www.theverge.com/rss/index.xml' },
-  { category: 'SECURITY', url: 'https://threatpost.com/feed/' },
   {
-    category: 'OPEN-SOURCE',
-    url: 'https://news.google.com/rss/search?q=Open+Source+Software+when:1d&hl=en-US&gl=US&ceid=US:en',
+    category: "DEV",
+    url: "https://news.google.com/rss/search?q=Web+Development+when:1d&hl=en-US&gl=US&ceid=US:en",
+  },
+  { category: "TECH", url: "https://techcrunch.com/feed/" },
+  {
+    category: "STARTUP",
+    url: "https://techcrunch.com/category/startups/feed/",
+  },
+  { category: "GADGET", url: "https://www.theverge.com/rss/index.xml" },
+  { category: "SECURITY", url: "https://threatpost.com/feed/" },
+  {
+    category: "OPEN-SOURCE",
+    url: "https://news.google.com/rss/search?q=Open+Source+Software+when:1d&hl=en-US&gl=US&ceid=US:en",
   },
 ];
 
-/**
- * [언어 검증 함수]
- * ko 필드에 한글이 있는지, en 필드에 이상한 외국어 비중이 높지 않은지 체크합니다.
- */
 function validateLanguage(data) {
-  if (!data.title_ko || !data.content_ko || !data.title_en || !data.content_en) return false;
+  if (!data.title_ko || !data.content_ko || !data.title_en || !data.content_en)
+    return false;
 
-  const koRegex = /[가-힣]/; // 한글 포함 여부
-  const enUnusualChars = /[^\x00-\x7F]/g; // ASCII 외 문자 (유럽 특수문자 등)
+  const koRegex = /[가-힣]/;
+  const englishRegex = /[a-zA-Z]/g;
+  const enUnusualChars = /[^\x00-\x7F]/g;
 
-  const isKoValid = koRegex.test(data.title_ko) && koRegex.test(data.content_ko);
+  // 한국어 필드 검증 (비율 기반)
+  const koContent = data.content_ko;
+  const englishInKoCount = (koContent.match(englishRegex) || []).length;
+  const totalKoCount = koContent.length;
+  const englishRatioInKo = englishInKoCount / totalKoCount;
 
+  // 한글이 존재해야 하고, 영어 비중이 15% 미만이어야 함
+  const isKoValid =
+    koRegex.test(data.title_ko) &&
+    koRegex.test(koContent) &&
+    englishRatioInKo < 0.15;
+
+  // 영어 필드 검증
   const enContent = data.content_en;
-  const matches = enContent.match(enUnusualChars);
-  const isEnValid = !matches || matches.length < enContent.length * 0.05;
+  const unusualInEnCount = (enContent.match(enUnusualChars) || []).length;
+  const isEnValid = unusualInEnCount < enContent.length * 0.05;
 
   return isKoValid && isEnValid;
 }
 
 async function main() {
-  console.log('🚀 미어캣 로그 자동 포스팅 시스템 가동...');
+  console.log("🚀 미어캣 로그 자동 포스팅 시스템 가동 (개선 버전)...");
 
   for (const feed of FEEDS) {
     try {
@@ -57,9 +75,9 @@ async function main() {
 
       // DB 중복체크
       const { data: existing } = await supabase
-        .from('news_dev')
-        .select('id')
-        .eq('original_url', article.link)
+        .from("news_dev")
+        .select("id")
+        .eq("original_url", article.link)
         .single();
 
       if (existing) {
@@ -68,6 +86,12 @@ async function main() {
       }
 
       console.log(`[Processing] ${feed.category} - ${article.title}`);
+
+      // [데이터 전처리] HTML 태그 제거 및 길이 최적화
+      const cleanSnippet = (article.contentSnippet || article.content || "")
+        .replace(/(<([^>]+)>)/gi, "")
+        .replace(/\[\.\.\.\]/g, "")
+        .substring(0, 2500);
 
       let attempts = 0;
       const maxAttempts = 3;
@@ -78,26 +102,23 @@ async function main() {
 ### ROLE
 You are a professional tech blogger named 'Meerkat'. 
 Your goal is to transform the provided news into a high-quality blog post in both KOREAN and ENGLISH.
+Transform the news into a high-quality post for global tech enthusiasts.
 
-### Instructions:
-  - Do NOT use any language other than Korean and English.
-  - Even if the source material contains other languages, translate them entirely into the target language.
-  - If you use English technical terms in Korean mode, use them alongside Korean explanations.
-  ${attempts > 0 ? "⚠️ CRITICAL: Your previous response contained incorrect languages. Ensure '_ko' fields are strictly Korean and '_en' fields are strictly English." : ''}
+### 🚨 CRITICAL RULE: NO COPY-PASTING
+- DO NOT translate sentence by sentence.
+- DO NOT copy long lists or technical logs from the source.
+- REWRITE everything in your own words to provide a coherent insight.
+- **Language Sandbox**: 
+  - '_ko' fields MUST be 100% Korean. Never leave an entire English sentence.
+  - If you use English terms in '_ko', use 'Term(영어 용어)' format.
+  - '_en' fields MUST be 100% English.
 
-### STRICT CATEGORIZATION RULES
-Choose exactly ONE tag from this list: [AI, Dev, Web, Security, BigTech, Startup, Gadget].
-**CRITICAL**: Do NOT use 'AI-ML', 'TECH', or 'DEV'. 
-Example: Even if the source is 'AI-ML', if it's about a startup's funding, use 'Startup'. If it's about a new device, use 'Gadget'.
+### STRICT CATEGORIZATION
+Choose ONE: [AI, Dev, Web, Security, BigTech, Startup, Gadget].
 
-### SEO SLUG RULES
-- Create a URL-friendly English slug (e.g., "chatgpt-age-prediction-safety").
-
-### STRICT TITLE RULES
-- **Format**: "[Category] Insightful Title" (e.g., "[Web Development] Why AI is Changing the Game")
-- **KO Title**: Do NOT simply translate the original. Create a catchy, professional Korean title that focuses on the "Core Insight". Avoid listing brand names unless they are the main subject.
-- **EN Title**: Create a compelling "Click-worthy" title for global readers.
-
+### SEO & TITLE
+- Slug: URL-friendly English (e.g., "new-ai-chip-performance").
+- KO Title: Catchy insight-focused title (e.g., "[AI] 엔비디아가 제시하는 다음 세대 추론 엔진의 핵심").
 ### TASK & CONTENT QUALITY
 1. **Analyze**: Use ${article.title} and ${article.contentSnippet}.
 2. **Title**: Create a compelling, "click-worthy" title that highlights the most interesting part of the news.
@@ -113,12 +134,9 @@ Example: Even if the source is 'AI-ML', if it's about a startup's funding, use '
 4. **Closing**: End with a thought-provoking question tailored to the topic.
 5. **Source**: "\n\n원문 출처: [Title](${article.link})" (Text only).
 
-### STRICT OUTPUT RULES
-- **Language Separation**: 
-  - Fields ending in "_ko" MUST be 100% Korean.
-  - Fields ending in "_en" MUST be 100% English.
-- **Format**: Return ONLY a valid JSON object.
-- **No Hallucination**: Do not use Chinese or any language other than KO/EN.
+### OUTPUT FORMAT
+- Return ONLY a valid JSON object.
+- NO Hallucination (No Chinese, German, etc).
 
 ### JSON SCHEMA (MUST FOLLOW)
 {
@@ -132,42 +150,44 @@ Example: Even if the source is 'AI-ML', if it's about a startup's funding, use '
 
 ### INPUT DATA
 - News Title: ${article.title}
-- News Link: ${article.link}
+- News Content: ${cleanSnippet}
 `;
 
         const chatCompletion = await groq.chat.completions.create({
           messages: [
             {
-              role: 'system',
+              role: "system",
               content:
-                'You are a tech blog writer. You provide deep insights. You output only JSON.',
+                "You are a tech blog writer. You output ONLY JSON. You strictly follow language rules.",
             },
-            { role: 'user', content: prompt },
+            { role: "user", content: prompt },
           ],
-          model: 'llama-3.3-70b-versatile',
-          temperature: 0.15, // 일관성과 창의성의 균형
-          response_format: { type: 'json_object' },
+          model: "llama-3.3-70b-versatile",
+          temperature: 0.15, // 창의성보다 정확도와 제약 준수에 집중
+          response_format: { type: "json_object" },
         });
 
-        const parsed = JSON.parse(chatCompletion.choices[0].message.content || '{}');
+        const parsed = JSON.parse(
+          chatCompletion.choices[0].message.content || "{}",
+        );
 
-        // 검증 로직 가동
         if (validateLanguage(parsed)) {
           finalParsedData = parsed;
           break;
         } else {
           attempts++;
-          console.warn(`[Retry] 언어 검증 실패 (${attempts}/${maxAttempts}). 다시 생성합니다...`);
+          console.warn(
+            `[Retry] 언어 오염 감지 (${attempts}/${maxAttempts}). 재생성 중...`,
+          );
         }
       }
-      console.log('data = ', finalParsedData);
+
       if (!finalParsedData) {
-        console.error(`[Fail] ${article.title} - 언어 검증을 통과하지 못해 스킵합니다.`);
+        console.error(`[Fail] ${article.title} - 3회 시도 모두 검증 실패.`);
         continue;
       }
 
-      // DB 저장
-      const { error: dbError } = await supabase.from('news_dev').insert([
+      const { error: dbError } = await supabase.from("news_dev").insert([
         {
           category: finalParsedData.category,
           slug: finalParsedData.slug,
@@ -184,7 +204,6 @@ Example: Even if the source is 'AI-ML', if it's about a startup's funding, use '
       if (dbError) throw dbError;
       console.log(`✅ 저장 성공: ${finalParsedData.title_ko}`);
 
-      // API 쿨타임
       await new Promise((res) => setTimeout(res, 5000));
     } catch (error) {
       console.error(`❌ 에러 발생:`, error.message);
